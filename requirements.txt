@@ -1,0 +1,20 @@
+# Core application framework
+streamlit
+
+# QR Code scanning and generation
+pyzbar
+qrcode[pil]
+opencv-python
+Pillow
+numpy
+validators
+
+# Azure AI and OpenAI Services
+azure-ai-formrecognizer
+azure-cognitiveservices-speech
+azure-ai-textanalytics
+openai
+
+# Utility libraries
+requests
+python-dotenv
