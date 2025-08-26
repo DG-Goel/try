@@ -13,6 +13,7 @@ validators
 azure-ai-formrecognizer
 azure-cognitiveservices-speech
 azure-ai-textanalytics
+azure-core
 openai
 
 # Utility libraries
