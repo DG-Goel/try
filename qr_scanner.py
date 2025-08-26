@@ -35,29 +35,23 @@ class QRScanner:
     def scan_qr(self, image_path: str, enhance_image: bool = True) -> Dict[str, Any]:
         """
         Scan QR code from image with enhanced error handling and preprocessing
-
-        Args:
-            image_path: Path to the image file
-            enhance_image: Whether to apply image enhancement for better detection
-
-        Returns:
-            Dict containing QR code data and metadata
         """
         try:
             if not os.path.exists(image_path):
                 logger.error(f"Image file not found: {image_path}")
                 return self._create_error_response("Image file not found")
 
-            # Check file format
             file_ext = os.path.splitext(image_path)[1].lower()
             if file_ext not in self.supported_formats:
                 logger.error(f"Unsupported image format: {file_ext}")
                 return self._create_error_response(f"Unsupported image format: {file_ext}")
 
-            # Load and process image
-            img = Image.open(image_path)
+            try:
+                img = Image.open(image_path)
+            except Exception as e:
+                logger.error(f"Error opening image: {e}")
+                return self._create_error_response(f"Error opening image: {str(e)}")
 
-            # Try multiple processing approaches
             approaches = [
                 ("original", img),
                 ("enhanced", self._enhance_image(img) if enhance_image else img),
@@ -66,39 +60,54 @@ class QRScanner:
             ]
 
             for approach_name, processed_img in approaches:
-                result = self._decode_qr_codes(processed_img)
-                if result["success"]:
-                    logger.info(f"QR code detected using {approach_name} approach")
-                    result["processing_method"] = approach_name
-                    return result
+                try:
+                    result = self._decode_qr_codes(processed_img)
+                    if result["success"]:
+                        logger.info(f"QR code detected using {approach_name} approach")
+                        result["processing_method"] = approach_name
+                        return result
+                except Exception as e:
+                    logger.error(f"Error decoding with {approach_name} approach: {e}")
 
-            # If PIL approaches fail, try OpenCV
             if enhance_image:
-                cv_result = self._scan_with_opencv(image_path)
-                if cv_result["success"]:
-                    logger.info("QR code detected using OpenCV approach")
-                    return cv_result
+                try:
+                    cv_result = self._scan_with_opencv(image_path)
+                    if cv_result["success"]:
+                        logger.info("QR code detected using OpenCV approach")
+                        return cv_result
+                except Exception as e:
+                    logger.error(f"Error scanning with OpenCV: {e}")
 
             logger.warning(f"No QR code found in image: {image_path}")
             return self._create_error_response("No QR code found in image")
 
         except Exception as e:
-            logger.error(f"Error scanning QR code: {e}")
+            logger.error(f"Unexpected error scanning QR code: {e}")
             return self._create_error_response(f"Error scanning QR code: {str(e)}")
 
     def _decode_qr_codes(self, img: Image.Image) -> Dict[str, Any]:
         """Decode QR codes from PIL Image"""
         try:
-            # Convert PIL image to format compatible with pyzbar
             if img.mode != 'RGB':
-                img = img.convert('RGB')
+                try:
+                    img = img.convert('RGB')
+                except Exception as e:
+                    logger.error(f"Error converting image to RGB: {e}")
+                    return {"success": False, "error": "Failed to convert image"}
 
-            # Decode QR codes
-            decoded_objects = decode(img, symbols=[ZBarSymbol.QRCODE])
+            try:
+                decoded_objects = decode(img, symbols=[ZBarSymbol.QRCODE])
+            except Exception as e:
+                logger.error(f"Error during pyzbar decode: {e}")
+                return {"success": False, "error": str(e)}
 
             if decoded_objects:
-                # Process first QR code found
-                qr_data = decoded_objects[0].data.decode('utf-8')
+                try:
+                    qr_data = decoded_objects[0].data.decode('utf-8')
+                except Exception as e:
+                    logger.error(f"Error decoding QR data: {e}")
+                    return {"success": False, "error": "Failed to decode QR content"}
+
                 qr_type = self._detect_qr_type(qr_data)
 
                 response = {
@@ -106,17 +115,29 @@ class QRScanner:
                     "data": qr_data,
                     "type": qr_type,
                     "count": len(decoded_objects),
-                    "all_codes": [obj.data.decode('utf-8') for obj in decoded_objects],
-                    "positions": [self._get_qr_position(obj) for obj in decoded_objects]
+                    "all_codes": [],
+                    "positions": []
                 }
 
-                # Add type-specific metadata
-                if qr_type == QRCodeType.URL:
-                    response["url_info"] = self._analyze_url(qr_data)
-                elif qr_type == QRCodeType.EMAIL:
-                    response["email_info"] = self._parse_email(qr_data)
-                elif qr_type == QRCodeType.PHONE:
-                    response["phone_info"] = self._parse_phone(qr_data)
+                try:
+                    response["all_codes"] = [obj.data.decode('utf-8') for obj in decoded_objects]
+                except Exception as e:
+                    logger.warning(f"Error extracting all codes: {e}")
+
+                try:
+                    response["positions"] = [self._get_qr_position(obj) for obj in decoded_objects]
+                except Exception as e:
+                    logger.warning(f"Error extracting QR positions: {e}")
+
+                try:
+                    if qr_type == QRCodeType.URL:
+                        response["url_info"] = self._analyze_url(qr_data)
+                    elif qr_type == QRCodeType.EMAIL:
+                        response["email_info"] = self._parse_email(qr_data)
+                    elif qr_type == QRCodeType.PHONE:
+                        response["phone_info"] = self._parse_phone(qr_data)
+                except Exception as e:
+                    logger.warning(f"Error parsing type-specific info: {e}")
 
                 return response
 
@@ -129,32 +150,39 @@ class QRScanner:
     def _scan_with_opencv(self, image_path: str) -> Dict[str, Any]:
         """Fallback QR scanning using OpenCV"""
         try:
-            # Read image with OpenCV
             img = cv2.imread(image_path)
             if img is None:
                 return {"success": False, "error": "Could not read image with OpenCV"}
 
-            # Convert to grayscale
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            try:
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            except Exception as e:
+                logger.error(f"Error converting to grayscale: {e}")
+                return {"success": False, "error": "Failed to preprocess image"}
 
-            # Apply various preprocessing techniques
-            processed_images = [
-                ("original", gray),
-                ("gaussian_blur", cv2.GaussianBlur(gray, (5, 5), 0)),
-                ("median_blur", cv2.medianBlur(gray, 5)),
-                ("bilateral_filter", cv2.bilateralFilter(gray, 9, 75, 75)),
-                ("adaptive_threshold",
-                 cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2))
-            ]
+            processed_images = []
+            try:
+                processed_images = [
+                    ("original", gray),
+                    ("gaussian_blur", cv2.GaussianBlur(gray, (5, 5), 0)),
+                    ("median_blur", cv2.medianBlur(gray, 5)),
+                    ("bilateral_filter", cv2.bilateralFilter(gray, 9, 75, 75)),
+                    ("adaptive_threshold",
+                     cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                           cv2.THRESH_BINARY, 11, 2))
+                ]
+            except Exception as e:
+                logger.error(f"Error applying OpenCV preprocessing: {e}")
 
             for method_name, processed_img in processed_images:
-                # Convert back to PIL for pyzbar
-                pil_img = Image.fromarray(processed_img)
-                result = self._decode_qr_codes(pil_img)
-
-                if result["success"]:
-                    result["processing_method"] = f"opencv_{method_name}"
-                    return result
+                try:
+                    pil_img = Image.fromarray(processed_img)
+                    result = self._decode_qr_codes(pil_img)
+                    if result["success"]:
+                        result["processing_method"] = f"opencv_{method_name}"
+                        return result
+                except Exception as e:
+                    logger.warning(f"OpenCV method {method_name} failed: {e}")
 
             return {"success": False, "error": "No QR codes found with OpenCV"}
 
@@ -165,17 +193,11 @@ class QRScanner:
     def _enhance_image(self, img: Image.Image) -> Image.Image:
         """Apply image enhancement for better QR detection"""
         try:
-            # Increase contrast
             enhancer = ImageEnhance.Contrast(img)
             img = enhancer.enhance(1.5)
-
-            # Increase sharpness
             enhancer = ImageEnhance.Sharpness(img)
             img = enhancer.enhance(2.0)
-
-            # Apply unsharp mask filter
             img = img.filter(ImageFilter.UnsharpMask(radius=1, percent=100, threshold=1))
-
             return img
         except Exception as e:
             logger.error(f"Error enhancing image: {e}")
@@ -184,10 +206,7 @@ class QRScanner:
     def _apply_high_contrast(self, img: Image.Image) -> Image.Image:
         """Apply high contrast processing"""
         try:
-            # Convert to grayscale
             gray = img.convert('L')
-
-            # Apply high contrast
             enhancer = ImageEnhance.Contrast(gray)
             return enhancer.enhance(3.0)
         except Exception as e:
@@ -196,22 +215,24 @@ class QRScanner:
 
     def _detect_qr_type(self, data: str) -> str:
         """Detect the type of QR code content"""
-        data_lower = data.lower()
-
-        if validators.url(data):
-            return QRCodeType.URL
-        elif data.startswith('mailto:') or '@' in data:
-            return QRCodeType.EMAIL
-        elif data.startswith('tel:') or data.startswith('phone:'):
-            return QRCodeType.PHONE
-        elif data.startswith('wifi:'):
-            return QRCodeType.WIFI
-        elif data.startswith('begin:vcard'):
-            return QRCodeType.VCARD
-        elif data.startswith('geo:'):
-            return QRCodeType.LOCATION
-        else:
-            return QRCodeType.TEXT
+        try:
+            if validators.url(data):
+                return QRCodeType.URL
+            elif data.startswith('mailto:') or '@' in data:
+                return QRCodeType.EMAIL
+            elif data.startswith('tel:') or data.startswith('phone:'):
+                return QRCodeType.PHONE
+            elif data.startswith('wifi:'):
+                return QRCodeType.WIFI
+            elif data.startswith('begin:vcard'):
+                return QRCodeType.VCARD
+            elif data.startswith('geo:'):
+                return QRCodeType.LOCATION
+            else:
+                return QRCodeType.TEXT
+        except Exception as e:
+            logger.error(f"Error detecting QR type: {e}")
+            return QRCodeType.UNKNOWN
 
     def _analyze_url(self, url: str) -> Dict[str, Any]:
         """Analyze URL QR code"""
@@ -232,14 +253,10 @@ class QRScanner:
         """Parse email QR code"""
         try:
             if email_data.startswith('mailto:'):
-                email = email_data[7:]  # Remove 'mailto:' prefix
+                email = email_data[7:]
             else:
                 email = email_data
-
-            return {
-                "email": email,
-                "is_valid": validators.email(email)
-            }
+            return {"email": email, "is_valid": validators.email(email)}
         except Exception as e:
             logger.error(f"Error parsing email: {e}")
             return {"error": str(e)}
@@ -248,12 +265,11 @@ class QRScanner:
         """Parse phone QR code"""
         try:
             if phone_data.startswith('tel:'):
-                phone = phone_data[4:]  # Remove 'tel:' prefix
+                phone = phone_data[4:]
             elif phone_data.startswith('phone:'):
-                phone = phone_data[6:]  # Remove 'phone:' prefix
+                phone = phone_data[6:]
             else:
                 phone = phone_data
-
             return {
                 "phone": phone,
                 "formatted": phone.replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
@@ -282,27 +298,20 @@ class QRScanner:
             return {}
 
     def _create_error_response(self, error_message: str) -> Dict[str, Any]:
-        """Create standardized error response"""
-        return {
-            "success": False,
-            "error": error_message,
-            "data": None,
-            "type": None
-        }
+        return {"success": False, "error": error_message, "data": None, "type": None}
 
     def scan_multiple_qr_codes(self, image_path: str) -> List[Dict[str, Any]]:
-        """Scan and return all QR codes found in image"""
         try:
             result = self.scan_qr(image_path)
             if result["success"] and result.get("count", 0) > 1:
-                return [
-                    {
-                        "data": code,
-                        "type": self._detect_qr_type(code),
-                        "position": pos
-                    }
-                    for code, pos in zip(result["all_codes"], result["positions"])
-                ]
+                try:
+                    return [
+                        {"data": code, "type": self._detect_qr_type(code), "position": pos}
+                        for code, pos in zip(result["all_codes"], result["positions"])
+                    ]
+                except Exception as e:
+                    logger.error(f"Error processing multiple QR codes: {e}")
+                    return []
             elif result["success"]:
                 return [{"data": result["data"], "type": result["type"]}]
             else:
@@ -312,72 +321,81 @@ class QRScanner:
             return []
 
     def download_and_scan_qr(self, image_url: str) -> Dict[str, Any]:
-        """Download image from URL and scan for QR codes"""
         try:
             if not validators.url(image_url):
                 return self._create_error_response("Invalid URL provided")
 
-            # Download image
-            response = requests.get(image_url, timeout=10)
-            response.raise_for_status()
+            try:
+                response = requests.get(image_url, timeout=10)
+                response.raise_for_status()
+            except requests.RequestException as e:
+                logger.error(f"Error downloading image: {e}")
+                return self._create_error_response(f"Error downloading image: {str(e)}")
 
-            # Save to temporary file
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp_file:
-                tmp_file.write(response.content)
-                tmp_file_path = tmp_file.name
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp_file:
+                    tmp_file.write(response.content)
+                    tmp_file_path = tmp_file.name
+            except Exception as e:
+                logger.error(f"Error saving temporary image: {e}")
+                return self._create_error_response("Failed to save temporary file")
 
-            # Scan QR code
-            result = self.scan_qr(tmp_file_path)
+            try:
+                result = self.scan_qr(tmp_file_path)
+            except Exception as e:
+                logger.error(f"Error scanning downloaded image: {e}")
+                result = self._create_error_response("Error scanning downloaded image")
 
-            # Clean up
-            os.unlink(tmp_file_path)
+            try:
+                os.unlink(tmp_file_path)
+            except Exception as e:
+                logger.warning(f"Could not delete temporary file: {e}")
 
             return result
 
-        except requests.RequestException as e:
-            logger.error(f"Error downloading image: {e}")
-            return self._create_error_response(f"Error downloading image: {str(e)}")
         except Exception as e:
             logger.error(f"Error processing downloaded image: {e}")
             return self._create_error_response(f"Error processing image: {str(e)}")
 
 
-# Global scanner instance
 qr_scanner = QRScanner()
 
 
 def scan_qr(image_path: str) -> str:
-    """
-    Simple wrapper function for backward compatibility
-    Returns just the QR code data as string
-    """
-    result = qr_scanner.scan_qr(image_path)
-    if result["success"]:
-        return result["data"]
-    else:
-        return result.get("error", "No QR code found.")
+    try:
+        result = qr_scanner.scan_qr(image_path)
+        if result["success"]:
+            return result["data"]
+        else:
+            return result.get("error", "No QR code found.")
+    except Exception as e:
+        logger.error(f"Error in scan_qr wrapper: {e}")
+        return "Error scanning QR code"
 
 
 def scan_qr_detailed(image_path: str) -> Dict[str, Any]:
-    """
-    Enhanced function that returns detailed QR code information
-    """
-    return qr_scanner.scan_qr(image_path)
+    try:
+        return qr_scanner.scan_qr(image_path)
+    except Exception as e:
+        logger.error(f"Error in scan_qr_detailed wrapper: {e}")
+        return {"success": False, "error": str(e)}
 
 
 def scan_qr_from_url(image_url: str) -> Dict[str, Any]:
-    """
-    Scan QR code from image URL
-    """
-    return qr_scanner.download_and_scan_qr(image_url)
+    try:
+        return qr_scanner.download_and_scan_qr(image_url)
+    except Exception as e:
+        logger.error(f"Error in scan_qr_from_url wrapper: {e}")
+        return {"success": False, "error": str(e)}
 
 
 def get_qr_info(qr_data: str) -> Dict[str, Any]:
-    """
-    Get information about QR code content without scanning
-    """
-    return {
-        "data": qr_data,
-        "type": qr_scanner._detect_qr_type(qr_data),
-        "length": len(qr_data)
-    }
+    try:
+        return {
+            "data": qr_data,
+            "type": qr_scanner._detect_qr_type(qr_data),
+            "length": len(qr_data)
+        }
+    except Exception as e:
+        logger.error(f"Error in get_qr_info wrapper: {e}")
+        return {"error": str(e)}
